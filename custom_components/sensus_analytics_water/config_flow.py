@@ -15,6 +15,7 @@ from .const import (
     CONF_ACCOUNT_NUMBER,
     CONF_BASE_URL,
     CONF_PASSWORD,
+    CONF_SSO_AUTH,
     CONF_USERNAME,
     CONF_WATER_METER_NUMBER,
     DOMAIN,
@@ -30,22 +31,23 @@ class SensusAnalyticsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def is_matching(self, other_flow):
         """Determine if this flow matches another flow."""
-        # Implement matching logic if necessary
-        return False  # Return False if you don't have specific matching logic
+        return False
 
     async def async_step_user(self, user_input=None) -> FlowResult:
         """Handle the initial step."""
         errors = {}
 
         if user_input is not None:
-            _LOGGER.debug("User input: %s", user_input)
-            # Set a unique ID based on account and meter number
-            unique_id = f"{user_input[CONF_ACCOUNT_NUMBER]}_{user_input[CONF_WATER_METER_NUMBER]}"
+            unique_id = (
+                f"{user_input[CONF_ACCOUNT_NUMBER]}_"
+                f"{user_input[CONF_WATER_METER_NUMBER]}"
+            )
             await self.async_set_unique_id(unique_id)
             self._abort_if_unique_id_configured()
 
-            # Validate the user input (e.g., test the connection)
-            valid = await self._test_credentials(user_input)
+            valid = bool(user_input.get(CONF_SSO_AUTH)) or await self._test_credentials(
+                user_input
+            )
             if valid:
                 return self.async_create_entry(title="Sensus Analytics", data=user_input)
             errors["base"] = "auth"
@@ -57,6 +59,7 @@ class SensusAnalyticsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PASSWORD): str,
                 vol.Required(CONF_ACCOUNT_NUMBER): str,
                 vol.Required(CONF_WATER_METER_NUMBER): str,
+                vol.Optional(CONF_SSO_AUTH): str,
                 vol.Required("water_unit_type", default="gal"): vol.In(["CCF", "gal"]),
                 vol.Optional("water_tier1_gallons"): cv.positive_float,
                 vol.Required("water_tier1_price", default=0.0128): cv.positive_float,
@@ -81,7 +84,6 @@ class SensusAnalyticsConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     allow_redirects=False,
                     timeout=10,
                 ) as response:
-                    _LOGGER.debug("Authentication response status: %s", response.status)
                     return response.status == 302
         except aiohttp.ClientError as error:
             _LOGGER.error("Error validating credentials: %s", error)
@@ -104,42 +106,28 @@ class SensusAnalyticsOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
-            _LOGGER.debug("User updated options: %s", user_input)
-            # Update the entry with new options
             self.hass.config_entries.async_update_entry(self.config_entry, data=user_input)
-            # Force a sensor refresh
-            coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]
-            await coordinator.async_request_refresh()
+            await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(title="", data={})
 
-        # Fetch current configuration data
         current_data = self.config_entry.data
-
         data_schema = vol.Schema(
             {
+                vol.Required(CONF_BASE_URL, default=current_data.get(CONF_BASE_URL)): str,
+                vol.Required(CONF_USERNAME, default=current_data.get(CONF_USERNAME)): str,
+                vol.Required(CONF_PASSWORD, default=current_data.get(CONF_PASSWORD)): str,
                 vol.Required(
-                    CONF_BASE_URL,
-                    default=current_data.get(CONF_BASE_URL),
-                ): str,
-                vol.Required(
-                    CONF_USERNAME,
-                    default=current_data.get(CONF_USERNAME),
-                ): str,
-                vol.Required(
-                    CONF_PASSWORD,
-                    default=current_data.get(CONF_PASSWORD),
-                ): str,
-                vol.Required(
-                    CONF_ACCOUNT_NUMBER,
-                    default=current_data.get(CONF_ACCOUNT_NUMBER),
+                    CONF_ACCOUNT_NUMBER, default=current_data.get(CONF_ACCOUNT_NUMBER)
                 ): str,
                 vol.Required(
                     CONF_WATER_METER_NUMBER,
                     default=current_data.get(CONF_WATER_METER_NUMBER),
                 ): str,
+                vol.Optional(
+                    CONF_SSO_AUTH, default=current_data.get(CONF_SSO_AUTH, "")
+                ): str,
                 vol.Required(
-                    "water_unit_type",
-                    default=current_data.get("water_unit_type", "gal"),
+                    "water_unit_type", default=current_data.get("water_unit_type", "gal")
                 ): vol.In(["CCF", "gal"]),
                 vol.Optional(
                     "water_tier1_gallons",
@@ -167,5 +155,4 @@ class SensusAnalyticsOptionsFlow(config_entries.OptionsFlow):
                 ): cv.positive_float,
             }
         )
-
         return self.async_show_form(step_id="init", data_schema=data_schema)
